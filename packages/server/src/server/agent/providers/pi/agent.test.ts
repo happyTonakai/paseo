@@ -854,6 +854,41 @@ describe("PiRpcAgentSession", () => {
     ]);
   });
 
+  test("settles an autonomous turn triggered by a Pi extension custom message", async () => {
+    const { pi, events } = await createSession();
+    const fakeSession = pi.latestSession();
+
+    fakeSession.emit({ type: "agent_start" });
+    fakeSession.emit({
+      type: "message_end",
+      message: {
+        role: "custom",
+        content: [{ type: "text", text: "Background process completed" }],
+      },
+    });
+    fakeSession.emit({ type: "turn_start" });
+    fakeSession.finishAgentRun({
+      message: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "Continuation finished" }],
+      },
+      willRetry: false,
+    });
+
+    expect(events.timelineItems()).toEqual([
+      { type: "assistant_message", text: "Background process completed" },
+    ]);
+    expect(events.turnLifecycleEvents()).toEqual([{ type: "turn_started", turnId: undefined }]);
+
+    fakeSession.settleTurn();
+
+    expect(events.turnLifecycleEvents()).toEqual([
+      { type: "turn_started", turnId: undefined },
+      { type: "turn_completed", turnId: undefined },
+    ]);
+  });
+
   test("canceling a silent Pi extension command leaves the session usable", async () => {
     const { pi, session, events } = await createSession();
     const fakeSession = pi.latestSession();
@@ -1388,6 +1423,24 @@ describe("PiRpcAgentSession", () => {
     await expect(events.nextTurnFailure()).resolves.toMatchObject({
       error: "Pi exited",
     });
+  });
+
+  test("fails an autonomous turn when the Pi process exits before settlement", async () => {
+    const { pi, events } = await createSession();
+    const fakeSession = pi.latestSession();
+
+    fakeSession.emit({ type: "agent_start" });
+    fakeSession.emit({ type: "turn_start" });
+    fakeSession.emit({ type: "process_exit", error: "Pi exited" });
+
+    await expect(events.nextTurnFailure()).resolves.toMatchObject({
+      error: "Pi exited",
+      turnId: undefined,
+    });
+    expect(events.turnLifecycleEvents()).toEqual([
+      { type: "turn_started", turnId: undefined },
+      { type: "turn_failed", turnId: undefined },
+    ]);
   });
 
   test("completes locally handled slash commands when agentInvoked is false", async () => {
